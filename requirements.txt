@@ -1,0 +1,4 @@
+requests
+websocket-client
+win11toast
+python-dotenv
