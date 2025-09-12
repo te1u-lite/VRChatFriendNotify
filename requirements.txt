@@ -1,4 +1,5 @@
-requests
-websocket-client
-win11toast
-python-dotenv
+python-dotenv>=1.0
+requests>=2.31
+websocket-client>=1.6
+pyotp>=2.9
+win11toast>=0.31; sys_platform == "win32"
