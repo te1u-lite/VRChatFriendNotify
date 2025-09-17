@@ -98,6 +98,10 @@ class VRChatHTTP:
     def post(self,url:str,**kw)->requests.Response:
         return self._request("POST",url,**kw)
 
+    def _post_json_with_rate_limit(self, url: str, body: dict, **kw) -> requests.Response:
+        # 既に _request() で rate limit & 429 リトライしているので、それを使うだけ
+        return self.post(url, json=body, **kw)
+
     # --- auth/user ---
     def auth_user(self) -> dict:
         r = self.s.get("https://api.vrchat.cloud/api/1/auth/user")

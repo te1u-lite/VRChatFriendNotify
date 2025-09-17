@@ -209,3 +209,5 @@ __marimo__/
 #cookies
 .vrchat_cookies.pkl
 
+
+*.exe
