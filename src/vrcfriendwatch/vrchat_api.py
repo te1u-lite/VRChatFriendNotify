@@ -13,7 +13,7 @@ class VRChatAPI:
     def list_friends(self,*,offline:bool,n:int =100)->list[dict]:
         out,offset,n=[],0,min(int(n),100)
         while True:
-            r = self.http.s.get(
+            r = self.http.get(
                 "https://api.vrchat.cloud/api/1/auth/user/friends",
                 params={"offset":offset,"n":n,"offline":str(offline).lower()},
             )
@@ -42,13 +42,13 @@ class VRChatAPI:
     @lru_cache(maxsize=2048)
     def display_name(self,user_id:str)->str:
         if not user_id:return ""
-        r = self.http.s.get(f"https://api.vrchat.cloud/api/1/users/{user_id}")
+        r = self.http.get(f"https://api.vrchat.cloud/api/1/users/{user_id}")
         return (r.json() or {}).get("displayName","")if r.ok else ""
 
     @lru_cache(maxsize=2048)
     def world_name(self,world_id:str)->str:
         if not world_id:return ""
-        r = self.http.s.get(f"https://api.vrchat.cloud/api/1/worlds/{world_id}")
+        r = self.http.get(f"https://api.vrchat.cloud/api/1/worlds/{world_id}")
         if r.ok:
             name = (r.json() or {}).get("name","")
             return name or world_id

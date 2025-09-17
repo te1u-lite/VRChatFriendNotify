@@ -11,6 +11,7 @@ import random
 
 from .settings import SETTINGS
 from .paths import COOKIES_PATH
+from .rate_limiter import RateLimiter
 
 log = logging.getLogger(__name__)
 
@@ -19,10 +20,22 @@ EMAIL_VERIFY_URL = "https://api.vrchat.cloud/api/1/auth/twofactorauth/emailotp/v
 
 
 class VRChatHTTP:
-    def __init__(self) -> None:
+    def __init__(self,limiter:RateLimiter | None = None) -> None:
         self.s = requests.Session()
         self.s.headers["User-Agent"] = SETTINGS.user_agent
         self._load_cookies()
+
+        # Rate Limiter の規定値
+        rate_per_min = getattr(SETTINGS,"rate_limit_per_minute",60)
+        burst_cap = getattr(SETTINGS,"rate_burst_capacity",10)
+        self.limiter = limiter or RateLimiter(capacity=burst_cap,refill_rate=rate_per_min/60.0)
+
+        # ETag フック
+        self._if_none_match: str | None=None
+        self.last_response_etag: str | None = None
+
+    def set_if_none_match(self,etag:str|None)->None:
+        self._if_none_match = etag
 
     # --- cookies ---
     def _load_cookies(self) -> None:
@@ -38,6 +51,52 @@ class VRChatHTTP:
         except Exception:
             # exv_info → exc_info に修正
             log.warning("Cookie save failed", exc_info=SETTINGS.debug)
+
+    def _request(self,method: str,url: str,*,
+                params:dict | None = None,
+                json: dict | None = None,
+                headers: dict | None = None,
+                auth: tuple[str,str] | None = None,
+                max_tries: int = 5,
+                base_sleep: float =0.6)->requests.Response:
+        local_headers = dict(headers or {})
+        if self._if_none_match:
+            local_headers["If-None-Match"] = self._if_none_match
+
+        last: requests .Response | None = None
+        for i in range(max_tries):
+            # 1) レートリミットを通す
+            self.limiter.acquire()
+
+            # 2)実リクエスト
+            resp = self.s.request(method,url,params=params,json=json,headers=local_headers,auth=auth)
+            last = resp
+
+            # ETagを保存
+            self.last_response_etag =resp.headers.get("ETag") or resp.headers.get("Etag")or None
+            self._if_none_match = None
+
+            # 429の扱い (Retry-After 優先)
+            if resp.status_code == 429 and i<max_tries-1:
+                ra = resp.headers.get("Retry-After")
+                try:
+                    wait = float(ra) if ra is not None else base_sleep* (2**i)
+                except Exception:
+                    wait = base_sleep * (2 **i)
+                wait += random.uniform(0,0.5) #ジッター
+                log.warning("429 on %s. Backing off for %.2fs (try %d%d)",url,wait,i+1,max_tries)
+                time.sleep(wait)
+                continue
+
+            return resp
+
+        return last
+
+    def get(self,url:str,**kw)->requests.Response:
+        return self._request("GET",url,**kw)
+
+    def post(self,url:str,**kw)->requests.Response:
+        return self._request("POST",url,**kw)
 
     # --- auth/user ---
     def auth_user(self) -> dict:
@@ -83,30 +142,6 @@ class VRChatHTTP:
         if re.search(r"[^A-Z2-7=]",secret):
             log.warning("TOTP secret に Base32 以外の文字が含まれている可能性があります。")
         return secret
-
-    def _post_json_with_rate_limit(self, url: str, payload: dict,
-                                    max_tries: int = 3, base_sleep: float = 2.0) -> requests.Response:
-        """
-        429 Too Many Requests のとき Retry-After を待ってから再試行する共通POSTヘルパー。
-        429以外のステータスはそのまま返す（呼び出し側で raise_for_status() する）。
-        """
-        last = None
-        for i in range(max_tries):
-            resp = self.s.post(url, json=payload)
-            last = resp
-            if resp.status_code != 429:
-                return resp
-            # 429: ヘッダーの Retry-After（秒）を優先し、なければ指数バックオフ
-            ra = resp.headers.get("Retry-After")
-            try:
-                wait = float(ra) if ra is not None else base_sleep * (2 ** i)
-            except Exception:
-                wait = base_sleep * (2 ** i)
-            wait += random.uniform(0, 0.5)  # ジッター
-            log.warning("429 on %s. Backing off for %.1fs (try %d/%d)", url, wait, i + 1, max_tries)
-            time.sleep(wait)
-        # 規定回数リトライ後の最後のレスポンスを返す（呼び出し側で raise_for_status してください）
-        return last
 
     def _verify_email_otp_with_prompt(self, tries: int = 3) -> None:
         """コンソールでメールOTPを入力させて検証。429は待って再試行。成功で return、失敗で例外。"""
